@@ -1,7 +1,10 @@
 {
-  "name": "veaero-scanner",
+  "name": "veaero-dashboard",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
     "ethers": "^6.10.0"
   }
