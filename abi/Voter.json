@@ -1,0 +1,58 @@
+[
+  {
+    "name": "length",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "pools",
+    "inputs": [{ "name": "_index", "type": "uint256" }],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "gauges",
+    "inputs": [{ "name": "_pool", "type": "address" }],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "weights",
+    "inputs": [{ "name": "_pool", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "totalWeight",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "gaugeToBribe",
+    "inputs": [{ "name": "_gauge", "type": "address" }],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "gaugeToFees",
+    "inputs": [{ "name": "_gauge", "type": "address" }],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "isAlive",
+    "inputs": [{ "name": "_gauge", "type": "address" }],
+    "outputs": [{ "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

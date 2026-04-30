@@ -1,0 +1,30 @@
+[
+  {
+    "name": "token0",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "token1",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "stable",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "symbol",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "string" }],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

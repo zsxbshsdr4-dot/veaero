@@ -1,0 +1,37 @@
+[
+  {
+    "name": "rewardsListLength",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "rewards",
+    "inputs": [{ "name": "_index", "type": "uint256" }],
+    "outputs": [{ "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "left",
+    "inputs": [{ "name": "_token", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "rewardRate",
+    "inputs": [{ "name": "_token", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "name": "periodFinish",
+    "inputs": [{ "name": "_token", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "name": "veaero-scanner",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "ethers": "^6.10.0"
+  }
+}
