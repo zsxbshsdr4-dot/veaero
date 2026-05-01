@@ -1,9 +1,9 @@
 {
-  "name": "veaero-dashboard",
+  "name": "veaero",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "ethers": "^6.10.0"
