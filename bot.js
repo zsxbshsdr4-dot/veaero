@@ -134,3 +134,7 @@ poll();
 
 // Test connectivity
 fetch(`${API}/getMe`).then(r=>r.json()).then(j=>console.log("Bot info:",j.result?.username)).catch(e=>console.error("API error:",e.message));
+
+// Keep alive for Railway
+import http from "http";
+http.createServer((req,res)=>res.end("OK")).listen(process.env.PORT||3000);
