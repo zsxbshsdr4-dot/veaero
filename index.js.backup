@@ -25,7 +25,6 @@ const PI = new ethers.Interface([
 const EI = new ethers.Interface([
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
-  "function balanceOf(address) view returns (uint256)",
 ]);
 const RI = new ethers.Interface([
   "function rewardsListLength() view returns (uint256)",
@@ -61,8 +60,7 @@ async function mcall(calls) {
   return res;
 }
 
-// Цены обновляются автоматически через DeFiLlama
-const PRICES_FALLBACK = {
+const PRICES = {
   "0x4200000000000000000000000000000000000006": 2500,
   "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 1.00,
   "0x940181a94a35a4569e4529a3cdfb74e38fd98631": 0.444,
@@ -83,24 +81,6 @@ function fU(n) {
 function fP(n) { return Number(n).toFixed(2) + "%"; }
 function pad(s, n) { return String(s).slice(0,n).padEnd(n); }
 function lpad(s, n) { return String(s).slice(0,n).padStart(n); }
-
-async function fetchLivePrices(tokens) {
-  try {
-    const key = (process.env.RPC_URL||"").split("/").pop();
-    const addresses = tokens.slice(0,25).map(a => ({network:"base-mainnet",address:a}));
-    const r = await fetch(`https://api.g.alchemy.com/prices/v1/${key}/tokens/by-address`,{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({addresses})
-    });
-    const j = await r.json();
-    const prices = {};
-    for(const t of (j.data||[])) prices[t.address.toLowerCase()] = parseFloat(t.prices?.[0]?.value||0);
-    return prices;
-  } catch(e) { console.error("Alchemy prices:", e.message); return {}; }
-}
-
-let LIVE_PRICES = {};
 
 async function main() {
   console.log("\n" + "═".repeat(100));
@@ -200,6 +180,8 @@ async function main() {
     if (!tok || tok === ethers.ZeroAddress) continue;
     amtCalls.push({target: rwMeta[i].addr, iface: RI, fn: "tokenRewardsPerEpoch", args: [tok, epoch]});
     amtMeta.push({...rwMeta[i], tok, ep: "current"});
+    amtCalls.push({target: rwMeta[i].addr, iface: RI, fn: "tokenRewardsPerEpoch", args: [tok, pEpoch]});
+    amtMeta.push({...rwMeta[i], tok, ep: "prev"});
   }
   const amts = await mcall(amtCalls);
 
@@ -229,7 +211,7 @@ async function main() {
     for (const [tok, {raw, type}] of Object.entries(tokens)) {
       const inf = tinfo[tok] || {symbol: "?", decimals: 18};
       const amt = Number(ethers.formatUnits(raw, inf.decimals));
-      const usd = amt * (LIVE_PRICES[tok] || PRICES_FALLBACK[tok] || 0);
+      const usd = amt * (PRICES[tok] || 0);
       const entry = {symbol: inf.symbol, amt, usd};
       if (type === "fees") {
         p.feeTokens.push(entry);
@@ -242,12 +224,6 @@ async function main() {
     }
   }
   console.log("✅");
-
-  // Загружаем живые цены
-  process.stdout.write("⏳ Цены (DeFiLlama)... ");
-  const allToks = [...new Set(amtMeta.map(m => m.tok.toLowerCase()))];
-  LIVE_PRICES = await fetchLivePrices(allToks);
-  console.log(`✅ ${Object.keys(LIVE_PRICES).length} цен`);
 
   // 5. Считаем метрики
   process.stdout.write("⏳ [5/5] Метрики... ");
