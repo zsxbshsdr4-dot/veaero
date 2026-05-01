@@ -99,6 +99,9 @@ async function handle(update){
     try{
       const{pools,meta}=await getData();
       if(text==="/best"){
+        const sorted=[...pools].filter(p=>p&&p.symbol&&p.totalUsd>500&&p.votePct>0.1).sort((a,x)=>x.myUsd-a.myUsd);
+        const b=sorted[0]||[...pools].filter(p=>p&&p.symbol).sort((a,x)=>x.myUsd-a.myUsd)[0];
+        if(!b){await send(chatId,"❌ Нет данных");return;}
         const b=[...pools].filter(p=>p.totalUsd>500&&p.votePct>0.1).sort((a,x)=>x.myUsd-a.myUsd)[0]||[...pools].sort((a,x)=>x.myUsd-a.myUsd)[0];
         await send(chatId,`🚀 <b>ЛУЧШИЙ ПУЛ</b>\n\n<b>${b.symbol}</b>\nГолоса: ${b.votePct.toFixed(2)}%\nFees: ${fU(b.feesUsd)}\nBribes: ${fU(b.bribeUsd)}\nTotal: ${fU(b.totalUsd)}\nveAPY: ${b.veApy.toFixed(1)}%\n💰 Мои: <b>${fU(b.myUsd)}</b>\n\n📅 ${meta.epochDate}`);
       }
