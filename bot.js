@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_TOKEN = process.env.BOT_TOKEN || "8687230051:AAEqtRCMzItsfIxlcVKIsSyBq04blQmyYtU";
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const RPC = process.env.RPC_URL || "https://mainnet.base.org";
 const MY_VEAERO = parseFloat(process.env.MY_VEAERO || "25262");
