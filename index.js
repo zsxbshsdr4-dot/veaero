@@ -386,3 +386,44 @@ main().catch(e => {
   console.error("\n❌", e.message);
   process.exit(1);
 });
+
+export async function fetchData() {
+  const WEEK = 604800;
+  const now = Math.floor(Date.now()/1000);
+  const epoch = Math.floor(now/WEEK)*WEEK;
+  const voter = new ethers.Contract(VOTER_ADDR, VI, provider);
+  const total = Number(await voter.length());
+  const totalW = await voter.totalWeight();
+  const totalVeAero = Number(ethers.formatEther(totalW));
+  const poolRes = await mcall(Array.from({length:total},(_,i)=>({target:VOTER_ADDR,iface:VI,fn:"pools",args:[i]})));
+  const pools = poolRes.filter(Boolean);
+  const m1 = await mcall(pools.flatMap(p=>[{target:VOTER_ADDR,iface:VI,fn:"gauges",args:[p]},{target:VOTER_ADDR,iface:VI,fn:"weights",args:[p]}]));
+  const active = [];
+  for(let i=0;i<pools.length;i++){const gauge=m1[i*2],weight=m1[i*2+1];if(!gauge||gauge===ethers.ZeroAddress||!weight||weight===0n)continue;const voteWeight=Number(ethers.formatEther(weight));active.push({pool:pools[i],gauge,voteWeight,votePct:(voteWeight/totalVeAero)*100,feesUsd:0,bribeUsd:0,totalUsd:0,feeTokens:[],bribeTokens:[]});}
+  active.sort((a,b)=>b.voteWeight-a.voteWeight);
+  const m2=await mcall(active.flatMap(p=>[{target:p.pool,iface:PI,fn:"token0"},{target:p.pool,iface:PI,fn:"token1"},{target:VOTER_ADDR,iface:VI,fn:"gaugeToFees",args:[p.gauge]},{target:VOTER_ADDR,iface:VI,fn:"gaugeToBribe",args:[p.gauge]}]));
+  for(let i=0;i<active.length;i++){active[i].t0=m2[i*4]||"";active[i].t1=m2[i*4+1]||"";active[i].feesAddr=m2[i*4+2]||"";active[i].bribeAddr=m2[i*4+3]||"";}
+  const uniq=[...new Set(active.flatMap(p=>[p.t0,p.t1]).filter(Boolean))];
+  const syms=await mcall(uniq.map(t=>({target:t,iface:EI,fn:"symbol"})));
+  const decs=await mcall(uniq.map(t=>({target:t,iface:EI,fn:"decimals"})));
+  const tinfo={};
+  for(let i=0;i<uniq.length;i++)tinfo[uniq[i].toLowerCase()]={symbol:syms[i]||"?",decimals:Number(decs[i]||18)};
+  for(const p of active)p.symbol=`${tinfo[p.t0.toLowerCase()]?.symbol||"?"}/${tinfo[p.t1.toLowerCase()]?.symbol||"?"}`;
+  const contracts=active.flatMap(p=>[{addr:p.feesAddr,pidx:active.indexOf(p),type:"fees"},{addr:p.bribeAddr,pidx:active.indexOf(p),type:"bribe"}]).filter(c=>c.addr);
+  const lenRes=await mcall(contracts.map(c=>({target:c.addr,iface:RI,fn:"rewardsListLength"})));
+  const rwC=[],rwM=[];
+  for(let i=0;i<contracts.length;i++){const len=Number(lenRes[i]||0);for(let t=0;t<Math.min(len,6);t++){rwC.push({target:contracts[i].addr,iface:RI,fn:"rewards",args:[t]});rwM.push(contracts[i]);}}
+  const rwA=await mcall(rwC);
+  const amtC=[],amtM=[];
+  for(let i=0;i<rwA.length;i++){const tok=rwA[i];if(!tok||tok===ethers.ZeroAddress)continue;amtC.push({target:rwM[i].addr,iface:RI,fn:"tokenRewardsPerEpoch",args:[tok,epoch]});amtM.push({...rwM[i],tok});}
+  const amts=await mcall(amtC);
+  const newT=[...new Set(amtM.map(m=>m.tok.toLowerCase()))].filter(t=>!tinfo[t]);
+  if(newT.length){const ns=await mcall(newT.map(t=>({target:t,iface:EI,fn:"symbol"})));const nd=await mcall(newT.map(t=>({target:t,iface:EI,fn:"decimals"})));for(let i=0;i<newT.length;i++)tinfo[newT[i]]={symbol:ns[i]||"?",decimals:Number(nd[i]||18)};}
+  const allToks=[...new Set(amtM.map(m=>m.tok.toLowerCase()))];
+  let LP={};
+  try{for(let i=0;i<allToks.length;i+=30){const r=await fetch(`https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/${allToks.slice(i,i+30).join(",")}`);const j=await r.json();for(const[a,p] of Object.entries(j?.data?.attributes?.token_prices||{}))if(p)LP[a.toLowerCase()]=parseFloat(p);}}catch(e){}
+  for(let i=0;i<amts.length;i++){const raw=amts[i];if(!raw||raw===0n)continue;const{pidx,tok,type}=amtM[i];const p=active[pidx];const inf=tinfo[tok.toLowerCase()]||{symbol:"?",decimals:18};const amt=Number(ethers.formatUnits(raw,inf.decimals));const usd=amt*(LP[tok.toLowerCase()]||PRICES_FALLBACK[tok.toLowerCase()]||0);const entry={symbol:inf.symbol,amt,usd};if(type==="fees"){p.feeTokens.push(entry);p.feesUsd+=usd;}else{p.bribeTokens.push(entry);p.bribeUsd+=usd;}p.totalUsd+=usd;}
+  for(const p of active){p.roi=p.voteWeight>0?p.totalUsd/p.voteWeight:0;p.myUsd=p.totalUsd*(MY_VEAERO/(p.voteWeight+MY_VEAERO));p.veApy=p.roi*52*100;}
+  const best=[...active].filter(p=>p.totalUsd>500&&p.votePct>0.1).sort((a,b)=>b.myUsd-a.myUsd)[0]||active[0];
+  return {pools:active,best,meta:{totalPools:total,activePools:active.length,myVeAero:MY_VEAERO,epochDate:new Date(epoch*1000).toDateString(),updatedAt:Date.now()}};
+}
