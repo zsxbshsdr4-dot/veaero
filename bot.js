@@ -131,3 +131,6 @@ async function poll(offset=0){
 
 console.log("🤖 veAERO Bot started!");
 poll();
+
+// Test connectivity
+fetch(`${API}/getMe`).then(r=>r.json()).then(j=>console.log("Bot info:",j.result?.username)).catch(e=>console.error("API error:",e.message));
