@@ -86,18 +86,19 @@ function lpad(s, n) { return String(s).slice(0,n).padStart(n); }
 
 async function fetchLivePrices(tokens) {
   try {
-    const key = (process.env.RPC_URL||"").split("/").pop();
-    const addresses = tokens.slice(0,25).map(a => ({network:"base-mainnet",address:a}));
-    const r = await fetch(`https://api.g.alchemy.com/prices/v1/${key}/tokens/by-address`,{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({addresses})
-    });
-    const j = await r.json();
     const prices = {};
-    for(const t of (j.data||[])) prices[t.address.toLowerCase()] = parseFloat(t.prices?.[0]?.value||0);
+    const BATCH = 30;
+    for(let i=0;i<tokens.length;i+=BATCH){
+      const batch = tokens.slice(i,i+BATCH).join(",");
+      const r = await fetch(`https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/${batch}`);
+      const j = await r.json();
+      const tp = j?.data?.attributes?.token_prices || {};
+      for(const [addr,price] of Object.entries(tp)){
+        if(price) prices[addr.toLowerCase()] = parseFloat(price);
+      }
+    }
     return prices;
-  } catch(e) { console.error("Alchemy prices:", e.message); return {}; }
+  } catch(e) { console.error("GeckoTerminal prices:", e.message); return {}; }
 }
 
 let LIVE_PRICES = {};
@@ -244,10 +245,60 @@ async function main() {
   console.log("✅");
 
   // Загружаем живые цены
-  process.stdout.write("⏳ Цены (DeFiLlama)... ");
+  process.stdout.write("⏳ Цены (GeckoTerminal)... ");
   const allToks = [...new Set(amtMeta.map(m => m.tok.toLowerCase()))];
   LIVE_PRICES = await fetchLivePrices(allToks);
-  console.log(`✅ ${Object.keys(LIVE_PRICES).length} цен`);
+  console.log(`✅ ${Object.keys(LIVE_PRICES).length} цен из GeckoTerminal`);
+
+  // On-chain цены через Multicall для токенов без цены
+  const USDC_A = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+  const WETH_A = "0x4200000000000000000000000000000000000006";
+  const missing2 = allToks.filter(t => !LIVE_PRICES[t] && t !== USDC_A && t !== WETH_A);
+  if (missing2.length > 0) {
+    process.stdout.write(`⏳ On-chain цены для ${missing2.length} токенов... `);
+    const GI = new ethers.Interface(["function getReserves() view returns (uint112,uint112,uint32)","function token0() view returns (address)"]);
+    const poolMap = new Map();
+    for(const tok of missing2){
+      const pp = active.find(p=>
+        (p.t0.toLowerCase()===tok&&(p.t1.toLowerCase()===USDC_A||p.t1.toLowerCase()===WETH_A))||
+        (p.t1.toLowerCase()===tok&&(p.t0.toLowerCase()===USDC_A||p.t0.toLowerCase()===WETH_A))
+      );
+      if(pp) poolMap.set(tok, pp);
+    }
+    const entries = [...poolMap.entries()];
+    const uniquePools = [...new Set(entries.map(e=>e[1].pool))].map(addr=>entries.find(e=>e[1].pool===addr)[1]);
+    const [reserves, token0s] = await Promise.all([
+      mcall(uniquePools.map(p=>({target:p.pool,iface:GI,fn:"getReserves"}))),
+      mcall(uniquePools.map(p=>({target:p.pool,iface:GI,fn:"token0"})))
+    ]);
+    let cnt2 = 0;
+    for(let i=0;i<uniquePools.length;i++){
+      try{
+        if(!reserves[i]||!token0s[i]) continue;
+        const pp = uniquePools[i];
+        const [r0,r1] = reserves[i];
+        const t0addr = token0s[i].toLowerCase();
+        const inf0 = tinfo[pp.t0.toLowerCase()]||{decimals:18};
+        const inf1 = tinfo[pp.t1.toLowerCase()]||{decimals:18};
+        const res0 = Number(ethers.formatUnits(r0,inf0.decimals));
+        const res1 = Number(ethers.formatUnits(r1,inf1.decimals));
+        const toks = missing2.filter(t=>t===pp.t0.toLowerCase()||t===pp.t1.toLowerCase());
+        for(const tok of toks){
+          const isTok0 = t0addr===tok;
+          const paired = isTok0?pp.t1.toLowerCase():pp.t0.toLowerCase();
+          const pairedP = LIVE_PRICES[paired]||PRICES_FALLBACK[paired]||0;
+          if(!pairedP) continue;
+          const tokRes = isTok0?res0:res1;
+          const pairRes = isTok0?res1:res0;
+          if(!tokRes) continue;
+          LIVE_PRICES[tok] = (pairRes*pairedP)/tokRes;
+          cnt2++;
+        }
+      }catch(e){}
+    }
+    console.log(`✅ ${cnt2} доп. цен`);
+  }
+
 
   // 5. Считаем метрики
   process.stdout.write("⏳ [5/5] Метрики... ");
