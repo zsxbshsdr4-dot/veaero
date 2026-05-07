@@ -5,17 +5,8 @@ const VOTER_ADDR = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5";
 const MC3_ADDR   = "0xcA11bde05977b3631167028862bE2a173976CA11";
 const SUGAR_ADDR = "0x68c19e13618c41158fe4baba1b8fb3a9c74bdb0a";
 const MY_VEAERO  = parseFloat(process.env.MY_VEAERO || "25262");
-
-// ── Config ──────────────────────────────────────────────────────────
-const CFG = {
-  INIT_BEFORE_END:   30 * 60,   // Start monitoring 30 min before epoch end
-  FINAL_TRIGGER:      3 * 60,   // Final vote recommendation at T-3 min
-  POLL_INTERVAL:     20 * 1000, // Poll every 20 seconds
-  TOP_POOLS:         10,        // Track top N pools
-  MIN_INCENTIVES:    500,       // Min $500 incentives to consider
-  MIN_VOTE_PCT:      0.05,      // Min 0.05% votes (not dead pool)
-  FAST_GROWTH_THRESHOLD: 0.15,  // 15% vote growth = whales/bots, skip
-};
+const BOT_TOKEN  = process.env.BOT_TOKEN || "8687230051:AAEqtRCMzItsfIxlcVKIsSyBq04blQmyYtU";
+const CHAT_ID    = process.env.CHAT_ID   || "478227003";
 
 const FALLBACK = {
   "0x4200000000000000000000000000000000000006": 2500,
@@ -30,398 +21,182 @@ const FALLBACK = {
 
 const provider = new ethers.JsonRpcProvider(RPC);
 const MC3_ABI = [{"name":"aggregate3","inputs":[{"name":"calls","type":"tuple[]","components":[{"name":"target","type":"address"},{"name":"allowFailure","type":"bool"},{"name":"callData","type":"bytes"}]}],"outputs":[{"name":"returnData","type":"tuple[]","components":[{"name":"success","type":"bool"},{"name":"returnData","type":"bytes"}]}],"stateMutability":"view","type":"function"}];
-const VI = new ethers.Interface([
-  "function length() view returns (uint256)",
-  "function pools(uint256) view returns (address)",
-  "function gauges(address) view returns (address)",
-  "function weights(address) view returns (uint256)",
-  "function totalWeight() view returns (uint256)",
-]);
+const VI = new ethers.Interface(["function length() view returns (uint256)","function pools(uint256) view returns (address)","function weights(address) view returns (uint256)","function totalWeight() view returns (uint256)"]);
 const PI = new ethers.Interface(["function token0() view returns (address)","function token1() view returns (address)"]);
 const EI = new ethers.Interface(["function symbol() view returns (string)","function decimals() view returns (uint8)"]);
-const RI = new ethers.Interface([
-  "function rewardsListLength() view returns (uint256)",
-  "function rewards(uint256) view returns (address)",
-  "function tokenRewardsPerEpoch(address,uint256) view returns (uint256)",
-]);
 const SUGAR_ABI = ["function epochsLatest(uint256,uint256) view returns (tuple(uint256 ts,address lp,uint256 votes,uint256 emissions,tuple(address token,uint256 amount)[] bribes,tuple(address token,uint256 amount)[] fees)[])"];
-
 const mc3   = new ethers.Contract(MC3_ADDR, MC3_ABI, provider);
 const sugar = new ethers.Contract(SUGAR_ADDR, SUGAR_ABI, provider);
 const voter = new ethers.Contract(VOTER_ADDR, VI, provider);
 
 function chunks(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n));return o;}
+async function mcall(calls){const res=[];for(const batch of chunks(calls,100)){try{const raw=await mc3.aggregate3(batch.map(c=>({target:c.target,allowFailure:true,callData:c.iface.encodeFunctionData(c.fn,c.args||[])})));for(let i=0;i<raw.length;i++){if(!raw[i].success||raw[i].returnData==="0x"){res.push(null);continue;}try{const d=batch[i].iface.decodeFunctionResult(batch[i].fn,raw[i].returnData);res.push(d.length===1?d[0]:d);}catch{res.push(null);}}}catch{batch.forEach(()=>res.push(null));}}return res;}
+async function fetchPrices(tokens){const prices={};for(let i=0;i<tokens.length;i+=30){try{const r=await fetch(`https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/${tokens.slice(i,i+30).join(",")}`);const j=await r.json();for(const[a,p] of Object.entries(j?.data?.attributes?.token_prices||{}))if(p)prices[a.toLowerCase()]=parseFloat(p);}catch{}}return prices;}
+async function sendTG(text){try{await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chat_id:CHAT_ID,text,parse_mode:"HTML"})});}catch{}}
 
-async function mcall(calls) {
-  const res = [];
-  for(const batch of chunks(calls, 100)) {
-    try {
-      const raw = await mc3.aggregate3(batch.map(c=>({
-        target:c.target, allowFailure:true,
-        callData:c.iface.encodeFunctionData(c.fn,c.args||[])
-      })));
-      for(let i=0;i<raw.length;i++){
-        if(!raw[i].success||raw[i].returnData==="0x"){res.push(null);continue;}
-        try{const d=batch[i].iface.decodeFunctionResult(batch[i].fn,raw[i].returnData);res.push(d.length===1?d[0]:d);}
-        catch{res.push(null);}
-      }
-    } catch { batch.forEach(()=>res.push(null)); }
+const fU=n=>{if(!n||n===0)return"$0";if(n>=1e6)return"$"+(n/1e6).toFixed(2)+"M";if(n>=1e3)return"$"+(n/1e3).toFixed(1)+"K";return"$"+n.toFixed(0);};
+const fP=n=>Number(n).toFixed(2)+"%";
+const fT=s=>{if(s<=0)return"⏰ ЗАКРЫТО";const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;return h>0?`${h}ч ${m}м ${sc}с`:`${m}м ${sc}с`;};
+const pad=(s,n)=>String(s).slice(0,n).padEnd(n);
+const lpad=(s,n)=>String(s).slice(0,n).padStart(n);
+
+async function loadTokenInfo(){
+  process.stdout.write("⏳ Загружаю токены... ");
+  const total=Number(await voter.length());
+  const poolRes=await mcall(Array.from({length:total},(_,i)=>({target:VOTER_ADDR,iface:VI,fn:"pools",args:[i]})));
+  const pools=poolRes.filter(Boolean);
+  const m1=await mcall(pools.flatMap(p=>[{target:p,iface:PI,fn:"token0"},{target:p,iface:PI,fn:"token1"}]));
+  const uniq=[...new Set(pools.flatMap((_,i)=>[m1[i*2],m1[i*2+1]]).filter(Boolean))];
+  const[syms,decs]=await Promise.all([mcall(uniq.map(t=>({target:t,iface:EI,fn:"symbol"}))),mcall(uniq.map(t=>({target:t,iface:EI,fn:"decimals"})))]);
+  const tinfo={};for(let i=0;i<uniq.length;i++)tinfo[uniq[i].toLowerCase()]={symbol:syms[i]||"?",decimals:Number(decs[i]||18)};
+  const poolSymbols={};for(let i=0;i<pools.length;i++){const t0=m1[i*2]?.toLowerCase()||"";const t1=m1[i*2+1]?.toLowerCase()||"";poolSymbols[pools[i].toLowerCase()]=`${tinfo[t0]?.symbol||"?"}/${tinfo[t1]?.symbol||"?"}`;}
+  console.log(`✅ ${pools.length} пулов`);
+  return{tinfo,poolSymbols};
+}
+
+async function fetchState(tinfo,PRICES){
+  const epochs=await sugar.epochsLatest(600,0);
+  const totalW=await voter.totalWeight();
+  const totalVeAero=Number(ethers.formatEther(totalW));
+  const state={};
+  for(const ep of epochs){
+    const lp=ep.lp.toLowerCase();
+    const votes=Number(ethers.formatEther(ep.votes));
+    let bribeUsd=0;const bribeTokens=[];
+    for(const t of ep.bribes){const tok=t.token.toLowerCase();const inf=tinfo[tok]||{symbol:"?",decimals:18};const amt=Number(ethers.formatUnits(t.amount,inf.decimals));const usd=amt*(PRICES[tok]||FALLBACK[tok]||0);bribeTokens.push({symbol:inf.symbol,usd});bribeUsd+=usd;}
+    state[lp]={lp:ep.lp,votes,votePct:(votes/totalVeAero)*100,bribeUsd,bribeTokens};
   }
-  return res;
+  return state;
 }
 
-async function fetchPrices(tokens) {
-  const prices = {};
-  for(let i=0;i<tokens.length;i+=30){
-    try{
-      const r = await fetch(`https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/${tokens.slice(i,i+30).join(",")}`);
-      const j = await r.json();
-      for(const [a,p] of Object.entries(j?.data?.attributes?.token_prices||{}))
-        if(p) prices[a.toLowerCase()] = parseFloat(p);
-    } catch {}
-  }
-  return prices;
+function getBest(tracked,poolSymbols){
+  const active=tracked.filter(p=>!p.excluded);
+  const withDelta=active.filter(p=>p.cur>p.base);
+  const pool=(withDelta.length?withDelta:active).sort((a,b)=>(b.cur-b.base)/(b.curVotes||1)-(a.cur-a.base)/(a.curVotes||1))[0];
+  if(!pool)return null;
+  return{pool,sym:poolSymbols[pool.lp.toLowerCase()]||pool.lp.slice(0,10),delta:pool.cur-pool.base,myUsd:pool.cur*(MY_VEAERO/(pool.curVotes+MY_VEAERO))};
 }
 
-
-const BOT_TOKEN = process.env.BOT_TOKEN || "8687230051:AAEqtRCMzItsfIxlcVKIsSyBq04blQmyYtU";
-const CHAT_ID   = process.env.CHAT_ID   || "478227003";
-
-async function sendTelegram(text) {
-  try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({chat_id: CHAT_ID, text, parse_mode: "HTML"})
-    });
-  } catch(e) { console.error("Telegram error:", e.message); }
+async function sendInterim(tracked,poolSymbols,left,num){
+  const b=getBest(tracked,poolSymbols);
+  const withDelta=tracked.filter(p=>!p.excluded&&p.cur>p.base);
+  let msg=`📊 <b>Промежуточный #${num}</b>\n⏱ До закрытия: ${fT(left)}\n\n`;
+  if(b){msg+=`🏆 <b>${b.sym}</b>\nIncentives: ${fU(b.pool.cur)}${b.delta>0?` | Δ +${fU(b.delta)}`:""}\nVotes: ${fP(b.pool.votePct)} | Мои: ${fU(b.myUsd)}\n\n`;}
+  if(withDelta.length){msg+=`🔥 Новые incentives (${withDelta.length}):\n`;for(const p of withDelta.slice(0,3)){const s=poolSymbols[p.lp.toLowerCase()]||p.lp.slice(0,8);msg+=`• ${s}: +${fU(p.cur-p.base)}\n`;}}
+  else{msg+=`📊 Изменений пока нет`;}
+  await sendTG(msg);
+  console.log(`\n📱 Промежуточный #${num} отправлен`);
 }
 
-const fU = n=>{if(!n||n===0)return"$0";if(n>=1e6)return"$"+(n/1e6).toFixed(2)+"M";if(n>=1e3)return"$"+(n/1e3).toFixed(1)+"K";return"$"+n.toFixed(0);};
-const fP = n=>Number(n).toFixed(2)+"%";
-const pad = (s,n)=>String(s).slice(0,n).padEnd(n);
-const lpad = (s,n)=>String(s).slice(0,n).padStart(n);
-const fTime = s=>{const m=Math.floor(s/60),sec=s%60;return`${m}m ${sec}s`;};
-
-// ── Fetch current pool state ────────────────────────────────────────
-async function fetchPoolState(tinfo, PRICES, epoch) {
-  let epochs;
-  try { epochs = await sugar.epochsLatest(500, 0); }
-  catch(e) { throw new Error("Sugar failed: "+e.message); }
-
-  const totalW = await voter.totalWeight();
-  const totalVeAero = Number(ethers.formatEther(totalW));
-
-  const state = {};
-  for(const ep of epochs) {
-    const lp = ep.lp.toLowerCase();
-    const votes = Number(ethers.formatEther(ep.votes));
-    const votePct = (votes/totalVeAero)*100;
-
-    let bribeUsd = 0;
-    const bribeTokens = [];
-    for(const t of ep.bribes) {
-      const tok = t.token.toLowerCase();
-      const inf = tinfo[tok]||{symbol:"?",decimals:18};
-      const amt = Number(ethers.formatUnits(t.amount, inf.decimals));
-      const usd = amt*(PRICES[tok]||FALLBACK[tok]||0);
-      bribeTokens.push({symbol:inf.symbol,amt,usd});
-      bribeUsd += usd;
-    }
-
-    let feesUsd = 0;
-    const feeTokens = [];
-    for(const t of ep.fees) {
-      const tok = t.token.toLowerCase();
-      const inf = tinfo[tok]||{symbol:"?",decimals:18};
-      const amt = Number(ethers.formatUnits(t.amount, inf.decimals));
-      const usd = amt*(PRICES[tok]||FALLBACK[tok]||0);
-      feeTokens.push({symbol:inf.symbol,amt,usd});
-      feesUsd += usd;
-    }
-
-    state[lp] = {
-      lp: ep.lp,
-      votes,
-      votePct,
-      bribeUsd,
-      feesUsd,
-      totalUsd: bribeUsd + feesUsd,
-      bribeTokens,
-      feeTokens,
-      ts: Number(ep.ts),
-    };
-  }
-  return {state, totalVeAero};
+async function sendFinal(tracked,poolSymbols,left){
+  const b=getBest(tracked,poolSymbols);
+  const withDelta=tracked.filter(p=>p.cur>p.base);
+  let msg=`🚨 <b>ФИНАЛЬНЫЙ ОТЧЁТ — ГОЛОСУЙ!</b>\n⏱ До закрытия: ${fT(left)}\n\n`;
+  if(!b||(!withDelta.length&&b.delta===0)){msg+=`⛔ <b>НЕ ГОЛОСОВАТЬ</b>\nНет новых incentives или все пулы перегреты.`;}
+  else{msg+=`✅ <b>ГОЛОСУЙ:</b>\n\nПул: <b>${b.sym}</b>\nIncentives: <b>${fU(b.pool.cur)}</b>${b.delta>0?`\nΔ Новые: <b>+${fU(b.delta)}</b>`:""}\nVotes: ${fP(b.pool.votePct)}\nМои rewards: <b>${fU(b.myUsd)}</b>`;
+  if(b.pool.bribeTokens?.length){msg+=`\n\nBribes:\n`;for(const t of b.pool.bribeTokens.slice(0,4))msg+=`• ${t.symbol}: ${fU(t.usd)}\n`;}
+  msg+=`\n\n🔗 aerodrome.finance/vote`;}
+  await sendTG(msg);
+  console.log(`\n📱 ФИНАЛЬНЫЙ ОТЧЁТ отправлен!`);
 }
 
-// ── Load token info (one time) ──────────────────────────────────────
-async function loadTokenInfo() {
-  console.log("⏳ Загружаю список пулов и токенов...");
-  const total = Number(await voter.length());
-  const poolRes = await mcall(Array.from({length:total},(_,i)=>({target:VOTER_ADDR,iface:VI,fn:"pools",args:[i]})));
-  const pools = poolRes.filter(Boolean);
-  const m1 = await mcall(pools.flatMap(p=>[
-    {target:p,iface:PI,fn:"token0"},
-    {target:p,iface:PI,fn:"token1"},
-  ]));
-  const uniq = [...new Set(pools.flatMap((_,i)=>[m1[i*2],m1[i*2+1]]).filter(Boolean))];
-  const [syms,decs] = await Promise.all([
-    mcall(uniq.map(t=>({target:t,iface:EI,fn:"symbol"}))),
-    mcall(uniq.map(t=>({target:t,iface:EI,fn:"decimals"}))),
-  ]);
-  const tinfo = {};
-  for(let i=0;i<uniq.length;i++) tinfo[uniq[i].toLowerCase()]={symbol:syms[i]||"?",decimals:Number(decs[i]||18)};
-
-  // Pool symbols
-  const poolSymbols = {};
-  for(let i=0;i<pools.length;i++){
-    const t0 = m1[i*2]?.toLowerCase()||"";
-    const t1 = m1[i*2+1]?.toLowerCase()||"";
-    poolSymbols[pools[i].toLowerCase()] = `${tinfo[t0]?.symbol||"?"}/${tinfo[t1]?.symbol||"?"}`;
-  }
-
-  console.log(`✅ ${pools.length} пулов, ${Object.keys(tinfo).length} токенов\n`);
-  return {tinfo, poolSymbols, pools};
-}
-
-// ── Render monitoring table ─────────────────────────────────────────
-function renderTable(trackedPools, poolSymbols, cycle, timeLeft) {
+function render(tracked,poolSymbols,cycle,left,nextReport){
   console.clear();
-  const bar = "═".repeat(100);
-  console.log("\n"+bar);
-  console.log("  🎯 LATE-INCENTIVE MONITOR — Aerodrome veAERO");
-  console.log(bar);
-  console.log(`  ⏱  До конца эпохи: ${fTime(timeLeft)}  |  Цикл: #${cycle}  |  Обновлено: ${new Date().toLocaleTimeString()}`);
-  console.log(bar+"\n");
-
-  if(!trackedPools.length) {
-    console.log("  ⚠️  Нет пулов для отслеживания\n");
-    return;
+  const W=process.stdout.columns||110;
+  const L="═".repeat(W);const T="─".repeat(W);const R="\x1b[0m";
+  console.log("\n"+L);
+  console.log("  🎯  AERODROME LATE-INCENTIVE MONITOR");
+  console.log(L);
+  const phase=left>60*60?"📊 Мониторинг":left>10*60?"⚡ Активный":"🔴 ФИНАЛЬНАЯ";
+  console.log(`  ⏱  До закрытия голосования: ${fT(left).padEnd(18)} ${phase.padEnd(28)} Цикл: #${cycle}  ${new Date().toLocaleTimeString("ru-RU")}`);
+  if(nextReport>0)console.log(`  📱  Следующий отчёт в Telegram через: ${fT(nextReport)}`);
+  console.log(L+"\n");
+  if(!tracked.length){console.log("  ⚠️  Нет кандидатов\n");return;}
+  const H=[lpad("#",3),pad("Пул",22),lpad("Incentives",12),lpad("Δ Bribe",10),lpad("Votes%",8),lpad("Δ Votes",9),lpad("Score",10),lpad("Мои$",8),"Статус"].join("  ");
+  console.log("  "+H);console.log("  "+T);
+  for(let i=0;i<tracked.length;i++){
+    const p=tracked[i];const sym=poolSymbols[p.lp.toLowerCase()]||p.lp.slice(0,10)+"…";
+    const delta=p.cur-p.base;const vd=p.baseVotes>0?((p.curVotes-p.baseVotes)/p.baseVotes*100):0;
+    const score=p.curVotes>0&&delta>0?delta/p.curVotes:0;const myUsd=p.cur*(MY_VEAERO/(p.curVotes+MY_VEAERO));
+    let st="👁  слежу";
+    if(p.excluded)st="❌ киты/боты";else if(delta>500)st="🔥 НОВЫЙ INCENTIVE!";else if(delta>0)st="🟡 рост";else if(vd>5)st="⚡ скрытый сигнал";
+    const dS=delta>0?"+"+fU(delta):delta<0?"-"+fU(Math.abs(delta)):"—";
+    const vS=(vd>=0?"+":"")+vd.toFixed(1)+"%";
+    const dC=delta>0?"\x1b[32m":delta<0?"\x1b[31m":"\x1b[90m";const vC=vd>10?"\x1b[31m":vd>3?"\x1b[33m":"\x1b[90m";
+    const rC=p.excluded?"\x1b[2m":delta>0?"\x1b[97m":"";
+    console.log("  "+rC+[lpad(String(i+1),3),pad(sym,22),lpad(fU(p.cur),12),dC+lpad(dS,10)+R+rC,lpad(fP(p.votePct),8),vC+lpad(vS,9)+R+rC,lpad(score>0?score.toFixed(5):"—",10),lpad(fU(myUsd),8),st].join("  ")+R);
   }
-
-  const H = [pad("#",3), pad("Пул",24), lpad("Incentives",12), lpad("Δ Incentive",12),
-             lpad("Votes%",8), lpad("Δ Votes%",9), lpad("Score",9), lpad("Статус",18)].join("  ");
-  console.log("  "+H);
-  console.log("  "+"─".repeat(H.length));
-
-  for(let i=0;i<trackedPools.length;i++){
-    const p = trackedPools[i];
-    const sym = poolSymbols[p.lp.toLowerCase()]||p.lp.slice(0,10)+"…";
-    const delta = p.currentIncentives - p.baseIncentives;
-    const votesDelta = p.currentVotes - p.baseVotes;
-    const votesDeltaPct = p.baseVotes>0 ? (votesDelta/p.baseVotes)*100 : 0;
-    const score = p.currentVotes>0 ? delta/p.currentVotes : 0;
-
-    let status = "👁  Слежу";
-    if(delta > 0) status = "🔥 Новый incentive!";
-    else if(votesDelta > 0 && delta === 0) status = "⚡ Скрытый signal";
-    if(p.excluded) status = "❌ Исключён (киты)";
-
-    const line = [
-      String(i+1).padStart(3),
-      pad(sym,24),
-      lpad(fU(p.currentIncentives),12),
-      lpad(delta>0?"+" + fU(delta):delta<0?"-"+fU(Math.abs(delta)):"—",12),
-      lpad(fP(p.currentVotePct),8),
-      lpad((votesDeltaPct>=0?"+":"")+votesDeltaPct.toFixed(2)+"%",9),
-      lpad(score>0?score.toFixed(6):"—",9),
-      status,
-    ].join("  ");
-    console.log("  "+line);
-  }
+  const b=getBest(tracked,poolSymbols);
+  console.log("\n  "+T);
+  if(b&&b.delta>0)console.log(`  \x1b[92m🏆 Лучший: ${b.sym} — ${fU(b.pool.cur)} | Δ+${fU(b.delta)} | Мои: ${fU(b.myUsd)}\x1b[0m`);
+  else if(b)console.log(`  \x1b[97m🏆 Лучший: ${b.sym} — ${fU(b.pool.cur)} | Мои: ${fU(b.myUsd)}\x1b[0m`);
   console.log();
 }
 
-// ── Render final recommendation ─────────────────────────────────────
-function renderFinal(target, poolSymbols) {
-  const bar = "═".repeat(80);
-  console.log("\n"+bar);
-  console.log("  🚀 ФИНАЛЬНАЯ РЕКОМЕНДАЦИЯ (T−3 мин)");
-  console.log(bar);
+async function main(){
+  const WEEK=604800,now=Math.floor(Date.now()/1000);
+  const epoch=Math.floor(now/WEEK)*WEEK;
+  const voteDeadline=epoch+WEEK-3600; // 02:00 Jerusalem = 1 час до конца эпохи
 
-  if(!target) {
-    console.log("\n  ⛔ НЕ ГОЛОСОВАТЬ — условия не выполнены:");
-    console.log("     • Нет новых incentives ИЛИ все пулы перегреты\n");
-    return;
-  }
+  console.log("\n"+"═".repeat(80));
+  console.log("  🎯  LATE-INCENTIVE MONITOR — Aerodrome veAERO");
+  console.log("═".repeat(80));
+  console.log(`  Дедлайн голосования: ${new Date(voteDeadline*1000).toLocaleString("ru-RU")}`);
+  console.log(`  До закрытия:         ${fT(voteDeadline-now)}`);
+  console.log("═".repeat(80)+"\n");
 
-  const sym = poolSymbols[target.lp.toLowerCase()]||target.lp;
-  const delta = target.currentIncentives - target.baseIncentives;
-  const myUsd = target.currentIncentives * (MY_VEAERO/(target.currentVotes+MY_VEAERO));
+  // Load tokens + prices
+  const{tinfo,poolSymbols}=await loadTokenInfo();
+  process.stdout.write("⏳ Загружаю цены... ");
+  const epochs0=await sugar.epochsLatest(600,0);
+  const allToks=[...new Set(epochs0.flatMap(ep=>[...ep.bribes,...ep.fees].map(t=>t.token.toLowerCase())))];
+  const PRICES=await fetchPrices(allToks);
+  console.log(`✅ ${Object.keys(PRICES).length} цен`);
 
-  console.log(`\n  Пул:         ${sym}`);
-  console.log(`  Address:     ${target.lp}`);
-  console.log(`  Incentives:  ${fU(target.currentIncentives)}`);
-  console.log(`  Δ Incentive: +${fU(delta)}`);
-  console.log(`  Votes:       ${fP(target.currentVotePct)}`);
-  console.log(`  Score:       ${(delta/target.currentVotes).toFixed(6)}`);
-  console.log(`  Мои rewards: ~${fU(myUsd)} (с ${MY_VEAERO} veAERO)`);
-  console.log(`\n  ✅ ГОЛОСУЙ СЕЙЧАС: aerodrome.finance/vote`);
-  console.log(bar+"\n");
+  // Base state
+  process.stdout.write("⏳ Загружаю базовое состояние... ");
+  const baseState=await fetchState(tinfo,PRICES);
+  const candidates=Object.values(baseState).filter(s=>s.bribeUsd>=200&&s.votePct>=0.03).sort((a,b)=>(b.bribeUsd/(b.votes||1))-(a.bribeUsd/(a.votes||1)));
+  const votes=candidates.map(p=>p.votes).sort((a,b)=>a-b);
+  const median=votes[Math.floor(votes.length/2)]||0;
+  const tracked=candidates.filter(p=>p.votes<=median*3).slice(0,15).map(p=>({lp:p.lp,base:p.bribeUsd,baseVotes:p.votes,cur:p.bribeUsd,curVotes:p.votes,votePct:p.votePct,bribeTokens:p.bribeTokens||[],excluded:false}));
+  console.log(`✅ Отслеживаю ${tracked.length} пулов\n`);
 
-  // Send to Telegram
-  const msg = target
-    ? `🚀 <b>ГОЛОСУЙ СЕЙЧАС!</b>\n\n` +
-      `Пул: <b>${poolSymbols[target.lp.toLowerCase()]||target.lp}</b>\n` +
-      `Incentives: ${fU(target.currentIncentives)}\n` +
-      `Δ: +${fU(target.currentIncentives - target.baseIncentives)}\n` +
-      `Votes: ${fP(target.currentVotePct)}\n` +
-      `Мои rewards: ~${fU(target.currentIncentives*(MY_VEAERO/(target.currentVotes+MY_VEAERO)))}\n\n` +
-      `⏱ До конца эпохи: 3 мин\n` +
-      `🔗 aerodrome.finance/vote`
-    : `⛔ <b>НЕ ГОЛОСОВАТЬ</b>\nУсловия не выполнены — нет новых incentives или все пулы перегреты.`;
-  await sendTelegram(msg);
-}
+  await sendTG(`🎯 <b>Monitor запущен</b>\nОтслеживаю ${tracked.length} пулов\nДедлайн: ${new Date(voteDeadline*1000).toLocaleTimeString("ru-RU")}\n\n📊 Промежуточные отчёты каждые 3 мин\n🚨 Финальный в 01:52`);
 
-// ── Main monitoring loop ────────────────────────────────────────────
-async function main() {
-  const WEEK = 604800;
-  const now = Math.floor(Date.now()/1000);
-  const epoch = Math.floor(now/WEEK)*WEEK;
-  const epochEnd = epoch + WEEK;
-  const timeLeft = epochEnd - now;
+  let cycle=0,interimCount=0,lastInterimAt=Math.floor(Date.now()/1000),finalSent=false;
 
-  console.log("\n═══════════════════════════════════════════════════════════════");
-  console.log("  🎯 LATE-INCENTIVE MONITOR v1.0");
-  console.log("═══════════════════════════════════════════════════════════════");
-  console.log(`  Эпоха: ${new Date(epoch*1000).toDateString()}`);
-  console.log(`  До конца: ${fTime(timeLeft)}`);
-  console.log(`  Начинаю мониторинг за ${fTime(CFG.INIT_BEFORE_END)} до конца\n`);
+  while(true){
+    const now2=Math.floor(Date.now()/1000);
+    const left=voteDeadline-now2;
 
-  // Load token info once
-  const {tinfo, poolSymbols} = await loadTokenInfo();
-
-  // Wait until monitoring window opens
-  const monitorStart = epochEnd - CFG.INIT_BEFORE_END;
-  const waitSecs = monitorStart - Math.floor(Date.now()/1000);
-  if(waitSecs > 0) {
-    console.log(`⏳ Жду начала окна мониторинга (через ${fTime(waitSecs)})...`);
-    console.log(`   Мониторинг начнётся в: ${new Date(monitorStart*1000).toLocaleTimeString()}\n`);
-    await new Promise(r=>setTimeout(r, waitSecs*1000));
-  }
-
-  // ── STEP 0: Initialize ──────────────────────────────────────────
-  console.log("\n🔍 ИНИЦИАЛИЗАЦИЯ — загружаю базовое состояние...");
-
-  // Load prices
-  const epochs0 = await sugar.epochsLatest(500, 0);
-  const allToks0 = [...new Set(epochs0.flatMap(ep=>[...ep.bribes,...ep.fees].map(t=>t.token.toLowerCase())))];
-  const PRICES = await fetchPrices(allToks0);
-  console.log(`💲 Загружено цен: ${Object.keys(PRICES).length}`);
-
-  const {state: baseState, totalVeAero} = await fetchPoolState(tinfo, PRICES, epoch);
-
-  // ── STEP 1: Filter candidates ───────────────────────────────────
-  const candidates = Object.entries(baseState)
-    .filter(([lp,s]) => s.bribeUsd >= CFG.MIN_INCENTIVES && s.votePct >= CFG.MIN_VOTE_PCT)
-    .map(([lp,s]) => ({lp:s.lp, ...s}));
-
-  // Remove pools with votes >> median
-  const votes = candidates.map(p=>p.votes).sort((a,b)=>a-b);
-  const median = votes[Math.floor(votes.length/2)]||0;
-
-  const trackedPools = candidates
-    .filter(p => p.votes <= median * 3)
-    .sort((a,b) => (b.bribeUsd/b.votes) - (a.bribeUsd/a.votes))
-    .slice(0, CFG.TOP_POOLS)
-    .map(p => ({
-      lp: p.lp,
-      baseIncentives: p.bribeUsd,
-      baseVotes: p.votes,
-      currentIncentives: p.bribeUsd,
-      currentVotes: p.votes,
-      currentVotePct: p.votePct,
-      excluded: false,
-    }));
-
-  console.log(`\n✅ Отслеживаю ${trackedPools.length} пулов из ${candidates.length} кандидатов`);
-  trackedPools.forEach((p,i) => {
-    const sym = poolSymbols[p.lp.toLowerCase()]||p.lp.slice(0,10)+"…";
-    console.log(`   ${i+1}. ${sym.padEnd(24)} incentives=${fU(p.baseIncentives)} votes=${fP(p.currentVotePct)}`);
-  });
-
-  if(!trackedPools.length) {
-    console.log("\n⛔ НЕТ КАНДИДАТОВ — нет пулов с достаточными incentives. Выход.");
-    return;
-  }
-
-  // ── STEP 2: Monitoring loop ─────────────────────────────────────
-  let cycle = 0;
-  let finalTriggered = false;
-
-  while(true) {
-    const now2 = Math.floor(Date.now()/1000);
-    const left = epochEnd - now2;
-
-    if(left <= 0) {
-      console.log("\n⏰ Эпоха закончилась. Выход.");
+    if(left<=0){
+      console.clear();
+      console.log("\n⏰ Голосование закрыто! Следующий раз — в среду.\n");
+      await sendTG("⏰ <b>Голосование закрыто!</b>\nСледующий мониторинг в среду в 01:20.");
       break;
     }
 
-    // Final trigger
-    if(left <= CFG.FINAL_TRIGGER && !finalTriggered) {
-      finalTriggered = true;
+    // Final at T-8min (01:52)
+    if(!finalSent&&left<=8*60){finalSent=true;await sendFinal(tracked,poolSymbols,left);}
 
-      // Find best pool
-      const activePools = trackedPools.filter(p=>!p.excluded);
-      const withDelta = activePools.filter(p=>p.currentIncentives > p.baseIncentives);
-      const ranked = (withDelta.length ? withDelta : activePools)
-        .sort((a,b) => {
-          const scoreA = (a.currentIncentives-a.baseIncentives)/a.currentVotes;
-          const scoreB = (b.currentIncentives-b.baseIncentives)/b.currentVotes;
-          return scoreB - scoreA;
-        });
+    // Interim every 3 min
+    const secSince=now2-lastInterimAt;
+    if(secSince>=3*60&&!finalSent){interimCount++;lastInterimAt=now2;await sendInterim(tracked,poolSymbols,left,interimCount);}
 
-      renderFinal(ranked[0]||null, poolSymbols);
-
-      // Keep refreshing table but don't trigger again
-    }
-
-    // Update pool states
-    try {
-      const {state: newState} = await fetchPoolState(tinfo, PRICES, epoch);
-      for(const tp of trackedPools) {
-        const ns = newState[tp.lp.toLowerCase()];
-        if(!ns) continue;
-
-        // STEP 3: Anti-filter — exclude if votes growing too fast
-        if(tp.baseVotes > 0) {
-          const growthRate = (ns.votes - tp.baseVotes) / tp.baseVotes;
-          if(growthRate > CFG.FAST_GROWTH_THRESHOLD) {
-            tp.excluded = true;
-          }
-        }
-
-        // Update current state
-        tp.currentIncentives = ns.bribeUsd;
-        tp.currentVotes = ns.votes;
-        tp.currentVotePct = ns.votePct;
-      }
-    } catch(e) {
-      // Silent fail — show stale data
-    }
+    // Update
+    try{
+      const ns=await fetchState(tinfo,PRICES);
+      for(const tp of tracked){const s=ns[tp.lp.toLowerCase()];if(!s)continue;if(tp.baseVotes>0&&(s.votes-tp.baseVotes)/tp.baseVotes>0.2)tp.excluded=true;tp.cur=s.bribeUsd;tp.curVotes=s.votes;tp.votePct=s.votePct;tp.bribeTokens=s.bribeTokens||[];}
+    }catch{}
 
     cycle++;
-    renderTable(trackedPools, poolSymbols, cycle, left);
+    const nextReport=finalSent?0:Math.max(0,3*60-secSince);
+    render(tracked,poolSymbols,cycle,left,nextReport);
 
-    if(left <= CFG.FINAL_TRIGGER) {
-      // Reshow final recommendation
-      const activePools = trackedPools.filter(p=>!p.excluded);
-      const withDelta = activePools.filter(p=>p.currentIncentives > p.baseIncentives);
-      const ranked = (withDelta.length ? withDelta : activePools)
-        .sort((a,b) => {
-          const scoreA = (a.currentIncentives-a.baseIncentives)/a.currentVotes;
-          const scoreB = (b.currentIncentives-b.baseIncentives)/b.currentVotes;
-          return scoreB - scoreA;
-        });
-      renderFinal(ranked[0]||null, poolSymbols);
-      if(left < 60) break;
-    }
-
-    await new Promise(r=>setTimeout(r, CFG.POLL_INTERVAL));
+    const interval=left>60*60?60000:left>10*60?30000:15000;
+    await new Promise(r=>setTimeout(r,interval));
   }
 }
 
 main().catch(e=>{console.error("\n❌",e.message);process.exit(1);});
-// This line is just a marker - see patch below
