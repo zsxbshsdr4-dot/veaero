@@ -4,7 +4,7 @@ const RPC        = process.env.RPC_URL || "https://base-mainnet.g.alchemy.com/v2
 const VOTER_ADDR = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5";
 const MC3_ADDR   = "0xcA11bde05977b3631167028862bE2a173976CA11";
 const SUGAR_ADDR = "0x68c19e13618c41158fe4baba1b8fb3a9c74bdb0a";
-const MY_VEAERO  = parseFloat(process.env.MY_VEAERO || "25262");
+const MY_VEAERO  = parseFloat(process.env.MY_VEAERO || "41350");
 const BOT_TOKEN  = process.env.BOT_TOKEN || "8687230051:AAEqtRCMzItsfIxlcVKIsSyBq04blQmyYtU";
 const CHAT_ID    = process.env.CHAT_ID   || "478227003";
 
