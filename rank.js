@@ -100,7 +100,13 @@ async function fetchData(prevVotes={}){
   const missingToks=allToks.filter(t=>!knownPrices[t]);
   const LP=await fetchOnChainPrices(missingToks,active,tinfo,knownPrices);
   for(let i=0;i<amts.length;i++){const raw=amts[i];if(!raw||raw===0n)continue;const{pidx,tok,type}=amtM[i];const p=active[pidx];const inf=tinfo[tok.toLowerCase()]||{symbol:"?",decimals:18};const amt=Number(ethers.formatUnits(raw,inf.decimals));const usd=amt*(LP[tok.toLowerCase()]||0);const entry={symbol:inf.symbol,usd};if(type==="fees"){p.feeTokens.push(entry);p.feesUsd+=usd;}else{p.bribeTokens.push(entry);p.bribeUsd+=usd;}p.totalUsd+=usd;}
-  for(const p of active){p.ratio=p.totalUsd/(p.voteWeight+MY_VEAERO);p.myUsd=p.totalUsd*(MY_VEAERO/(p.voteWeight+MY_VEAERO));p.veApy=p.ratio*52*100;}
+  for(const p of active){
+    // Ranking ratio WITHOUT my votes — shows true market undervaluation
+    p.ratio = p.voteWeight>0 ? p.totalUsd/p.voteWeight : 0;
+    p.veApy = p.ratio*52*100;
+    // My rewards WITH my votes added
+    p.myUsd = p.totalUsd*(MY_VEAERO/(p.voteWeight+MY_VEAERO));
+  }
   // Mark pools with suspicious vote drops (likely mid-reset)
   for(const p of active) {
     const prev = prevVotes[p.pool.toLowerCase()];
@@ -121,7 +127,7 @@ function render(data,cycle,timeLeft){
   const W=process.stdout.columns||115;
   const L="=".repeat(W);const T="-".repeat(W);const R="\x1b[0m";
   console.log("\n"+L);
-  console.log("  AERODROME -- (FEES+INCENTIVES) / (VOTES + MOI "+MY_VEAERO+")");
+  console.log("  AERODROME -- РЕЙТИНГ: (FEES+INCENTIVES)/VOTES  |  Мои rewards с "+MY_VEAERO+" veAERO");
   console.log(L);
   console.log(`  До закрытия: ${fT(timeLeft).padEnd(18)}  Цикл: #${cycle}  ${new Date().toLocaleTimeString("ru-RU")}`);
   console.log(L+"\n");
