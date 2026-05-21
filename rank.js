@@ -4,7 +4,7 @@ const RPC        = process.env.RPC_URL || "https://base-mainnet.g.alchemy.com/v2
 const VOTER_ADDR = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5";
 const MC3_ADDR   = "0xcA11bde05977b3631167028862bE2a173976CA11";
 const MY_VEAERO  = parseFloat(process.env.MY_VEAERO || "41350");
-const MY_LOCKS   = [25300, 11290, 4760];
+const MY_LOCKS   = [25300, 11290, 5211];
 const BOT_TOKEN  = process.env.BOT_TOKEN || "8687230051:AAEqtRCMzItsfIxlcVKIsSyBq04blQmyYtU";
 const CHAT_ID    = process.env.CHAT_ID   || "478227003";
 const VOTE_OFFSET = 3600;
@@ -67,7 +67,7 @@ const fT=s=>{if(s<=0)return"ЗАКРЫТО";const h=Math.floor(s/3600),m=Math.fl
 const pad=(s,n)=>String(s).slice(0,n).padEnd(n);
 const lpad=(s,n)=>String(s).slice(0,n).padStart(n);
 
-async function fetchData(){
+async function fetchData(prevVotes={}){
   const total=Number(await voter.length());
   const totalW=await voter.totalWeight();
   const totalVeAero=Number(ethers.formatEther(totalW));
@@ -100,6 +100,18 @@ async function fetchData(){
   const LP=await fetchOnChainPrices(missingToks,active,tinfo,knownPrices);
   for(let i=0;i<amts.length;i++){const raw=amts[i];if(!raw||raw===0n)continue;const{pidx,tok,type}=amtM[i];const p=active[pidx];const inf=tinfo[tok.toLowerCase()]||{symbol:"?",decimals:18};const amt=Number(ethers.formatUnits(raw,inf.decimals));const usd=amt*(LP[tok.toLowerCase()]||0);const entry={symbol:inf.symbol,usd};if(type==="fees"){p.feeTokens.push(entry);p.feesUsd+=usd;}else{p.bribeTokens.push(entry);p.bribeUsd+=usd;}p.totalUsd+=usd;}
   for(const p of active){p.ratio=p.totalUsd/(p.voteWeight+MY_VEAERO);p.myUsd=p.totalUsd*(MY_VEAERO/(p.voteWeight+MY_VEAERO));p.veApy=p.ratio*52*100;}
+  // Mark pools with suspicious vote drops (likely mid-reset)
+  for(const p of active) {
+    const prev = prevVotes[p.pool.toLowerCase()];
+    if(prev && prev > 100000 && p.voteWeight < prev * 0.5) {
+      p.resetSuspect = true;
+      p.voteWeight = prev; // use previous value
+      p.ratio = p.totalUsd/(prev+MY_VEAERO);
+      p.myUsd = p.totalUsd*(MY_VEAERO/(prev+MY_VEAERO));
+      p.veApy = p.ratio*52*100;
+    }
+    prevVotes[p.pool.toLowerCase()] = p.voteWeight;
+  }
   return active.filter(p=>p.totalUsd>0&&p.veApy<5000).sort((a,b)=>b.ratio-a.ratio);
 }
 
@@ -119,7 +131,7 @@ function render(data,cycle,timeLeft){
     const p=data[i];
     const rClr=i===0?"\x1b[92m":i<3?"\x1b[97m":i<10?"\x1b[37m":"\x1b[90m";
     const myClr=p.myUsd>200?"\x1b[33m":p.myUsd>100?"\x1b[37m":"\x1b[90m";
-    const toks=[...p.feeTokens.filter(t=>t.usd>0).map(t=>t.symbol),...p.bribeTokens.filter(t=>t.usd>0).map(t=>t.symbol)].slice(0,3).join(" ");
+    const toks=(p.resetSuspect?"⚠️RESET ":"")+[...p.feeTokens.filter(t=>t.usd>0).map(t=>t.symbol),...p.bribeTokens.filter(t=>t.usd>0).map(t=>t.symbol)].slice(0,3).join(" ");
     const row=[lpad(String(i+1),3),pad(p.symbol,22),lpad(fP(p.votePct),8),lpad(fU(p.feesUsd),9),lpad(fU(p.bribeUsd),9),lpad(fU(p.totalUsd),9),lpad("$"+p.ratio.toFixed(5),10),lpad(p.veApy.toFixed(1)+"%",8),myClr+lpad(fU(p.myUsd),8)+R+rClr,toks].join("  ");
     console.log("  "+rClr+row+R);
   }
@@ -137,35 +149,46 @@ function render(data,cycle,timeLeft){
   console.log("\n"+L);
   console.log("  РЕКОМЕНДАЦИЯ ДЛЯ ГОЛОСОВАНИЯ");
   console.log(L);
-  console.log(`  Пул:           \x1b[97m${bp.symbol}\x1b[0m`);
+  console.log(`  Лучший пул:    \x1b[97m${bp.symbol}\x1b[0m`);
   console.log(`  Наград всего:  \x1b[92m${fU(bp.totalUsd)}\x1b[0m  (fees: ${fU(bp.feesUsd)} + bribes: ${fU(bp.bribeUsd)})`);
   console.log(`  Голоса сейчас: ${Math.round(bp.voteWeight).toLocaleString()} veAERO  (${bp.votePct.toFixed(2)}% от всех)`);
   console.log(`  После моих:    ${votesAfter.toLocaleString()} veAERO  (+${totalMyVotes.toLocaleString()})`);
   console.log(`  Моя доля:      ${(totalMyVotes/votesAfter*100).toFixed(2)}%`);
   console.log(`  veAPY:         ${bp.veApy.toFixed(1)}%`);
+  console.log(`  100% в один:   \x1b[33m${fU(opt.totalSingle)}\x1b[0m`);
   console.log("\n  "+T);
 
   if(opt.singleBest){
-    console.log(`  \x1b[92mВсе 3 лока -> ${bp.symbol}\x1b[0m`);
+    console.log(`  \x1b[92mОПТИМАЛЬНО: все ${totalMyVotes.toLocaleString()} veAERO -> ${bp.symbol}\x1b[0m`);
     console.log("  "+T);
-    for(let i=0;i<MY_LOCKS.length;i++){
-      const lock=MY_LOCKS[i];
-      const reward=bp.totalUsd*(lock/(bp.voteWeight+lock));
-      const sharePct=(lock/votesAfter*100).toFixed(3);
-      console.log(`  Лок ${i+1}  ${(lock.toLocaleString()+" veAERO").padEnd(18)}  ${(lock/totalMyVotes*100).toFixed(1).padStart(5)}% моих  ->  ${bp.symbol.padEnd(22)}  доля: ${sharePct}%  \x1b[33m${fU(reward)}\x1b[0m`);
-    }
+    console.log(`  ${"Пул".padEnd(24)} ${"Голосов сейчас".padStart(14)} ${"После+моих".padStart(12)} ${"Моя доля".padStart(10)} ${"Мои veAERO".padStart(12)} ${"Rewards".padStart(9)}`);
+    console.log("  "+"-".repeat(90));
+    const sharePct=(totalMyVotes/votesAfter*100).toFixed(3);
+    console.log(`  ${bp.symbol.padEnd(24)} ${Math.round(bp.voteWeight).toLocaleString().padStart(14)} ${votesAfter.toLocaleString().padStart(12)} ${(sharePct+"%").padStart(10)} ${totalMyVotes.toLocaleString().padStart(12)}  \x1b[33m${fU(opt.totalSingle)}\x1b[0m`);
   } else {
     const gain=opt.totalOpt-opt.totalSingle;
-    console.log(`  Распределение выгоднее: +${fU(gain)} (+${(gain/opt.totalSingle*100).toFixed(1)}%)`);
+    console.log(`  \x1b[92mОПТИМАЛЬНО: распределить по ${opt.allocations.length} пулам  (+${fU(gain)}, +${(gain/opt.totalSingle*100).toFixed(1)}%)\x1b[0m`);
     console.log("  "+T);
-    const topPools=opt.allocations.slice(0,MY_LOCKS.length);
+    console.log(`  ${"Пул".padEnd(24)} ${"Голосов сейчас".padStart(14)} ${"После+моих".padStart(12)} ${"Моя доля".padStart(10)} ${"Мои veAERO".padStart(12)} ${"Rewards".padStart(9)}`);
+    console.log("  "+"-".repeat(90));
+    for(const r of opt.allocations){
+      const alloc=Math.round(r.alloc);
+      const vAfter=Math.round(r.pool.voteWeight)+alloc;
+      const sharePct=(alloc/vAfter*100).toFixed(3);
+      const reward=r.pool.totalUsd*(alloc/(r.pool.voteWeight+alloc));
+      console.log(`  ${r.pool.symbol.padEnd(24)} ${Math.round(r.pool.voteWeight).toLocaleString().padStart(14)} ${vAfter.toLocaleString().padStart(12)} ${(sharePct+"%").padStart(10)} ${alloc.toLocaleString().padStart(12)}  \x1b[33m${fU(reward)}\x1b[0m`);
+    }
+    console.log("  "+T);
+    // Suggest how to split across locks
+    console.log("\n  Как разбить по локам:");
+    let remaining=[...opt.allocations];
     for(let i=0;i<MY_LOCKS.length;i++){
-      const r=topPools[i]||opt.allocations[0];
       const lock=MY_LOCKS[i];
-      const reward=r.pool.totalUsd*(lock/(r.pool.voteWeight+lock));
-      const sharePct=(lock/(r.pool.voteWeight+lock)*100).toFixed(3);
-      const vAfter=Math.round(r.pool.voteWeight)+lock;
-      console.log(`  Лок ${i+1}  ${(lock.toLocaleString()+" veAERO").padEnd(18)}  ${(lock/totalMyVotes*100).toFixed(1).padStart(5)}% моих  ->  ${r.pool.symbol.padEnd(22)}  голосов: ${Math.round(r.pool.voteWeight).toLocaleString().padStart(10)} (${r.pool.votePct.toFixed(2)}%)  доля: ${sharePct}%  \x1b[33m${fU(reward)}\x1b[0m`);
+      // Find best pool that still has allocation for this lock
+      const best=remaining.find(r=>r.alloc>=lock*0.5)||remaining[0];
+      if(!best)break;
+      const reward=best.pool.totalUsd*(lock/(best.pool.voteWeight+lock));
+      console.log(`  Лок ${i+1} (${lock.toLocaleString()} veAERO)  ->  ${best.pool.symbol.padEnd(22)}  \x1b[33m${fU(reward)}\x1b[0m`);
     }
   }
   console.log("  "+T);
@@ -184,10 +207,11 @@ async function main(){
   console.log("=".repeat(80)+"\n");
   await sendTG(`Rank запущен\nДедлайн: ${new Date(voteDeadline*1000).toLocaleTimeString("ru-RU")}`);
   let cycle=0,firstSent=false,finalSent=false,prevTop="",prevMyUsd=0;
+  const prevVotes={};
   while(true){
     const now2=Math.floor(Date.now()/1000);const left=voteDeadline-now2;
     if(left<=0){console.clear();console.log("\nГолосование закрыто!\n");await sendTG("Голосование закрыто!");break;}
-    let data=[];try{data=await fetchData();}catch(e){console.error("Error:",e.message);}
+    let data=[];try{data=await fetchData(prevVotes);}catch(e){console.error("Error:",e.message);}
     cycle++;render(data,cycle,left);
     const isFinal=left<=8*60&&!finalSent;
     if(isFinal){
