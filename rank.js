@@ -3,8 +3,9 @@ import { ethers } from "ethers";
 const RPC        = process.env.RPC_URL || "https://base-mainnet.g.alchemy.com/v2/VCOkWlL74YaZXrQf3n-bU";
 const VOTER_ADDR = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5";
 const MC3_ADDR   = "0xcA11bde05977b3631167028862bE2a173976CA11";
-const MY_VEAERO  = parseFloat(process.env.MY_VEAERO || "41350");
-const MY_LOCKS   = [25300, 11290, 5211];
+// MY_VEAERO and MY_LOCKS will be set interactively at startup
+let MY_VEAERO = parseFloat(process.env.MY_VEAERO || "0");
+let MY_LOCKS = [];
 const BOT_TOKEN  = process.env.BOT_TOKEN || "8687230051:AAEqtRCMzItsfIxlcVKIsSyBq04blQmyYtU";
 const CHAT_ID    = process.env.CHAT_ID   || "478227003";
 const VOTE_OFFSET = 3600;
@@ -40,7 +41,7 @@ async function fetchOnChainPrices(missingTokens,activePools,tinfo,knownPrices){
 }
 
 function optimizeVotes(pools,myVeAero){
-  const candidates=pools.slice(0,20).filter(p=>p.totalUsd>100);
+  const candidates=pools.slice(0,50).filter(p=>p.totalUsd>50);
   if(!candidates.length)return null;
   const marginal=(p,x)=>p.totalUsd*p.voteWeight/Math.pow(p.voteWeight+x,2);
   let allocs=new Array(candidates.length).fill(0);
@@ -199,6 +200,21 @@ function render(data,cycle,timeLeft){
 async function main(){
   const WEEK=604800,now=Math.floor(Date.now()/1000),epoch=Math.floor(now/WEEK)*WEEK;
   const voteDeadline=epoch+WEEK-VOTE_OFFSET;
+  // Interactive input — только общее количество
+  const readline = (await import('readline')).createInterface({input:process.stdin,output:process.stdout});
+  const ask = (q) => new Promise(r=>readline.question(q,r));
+
+  console.log("\n"+"=".repeat(60));
+  const input = await ask("  Твои veAERO (Enter = 41801): ");
+  MY_VEAERO = parseFloat(input.replace(/,/g,'')) || 41801;
+  // Scale locks proportionally
+  const defaultTotal = MY_LOCKS.reduce((a,b)=>a+b,0);
+  MY_LOCKS = MY_LOCKS.map(l => Math.round(l * MY_VEAERO / defaultTotal));
+  readline.close();
+
+  console.log(`  Итого: ${MY_VEAERO.toLocaleString()} veAERO  |  Локи: ${MY_LOCKS.join(', ')}`);
+  console.log("=".repeat(60)+"\n");
+
   console.log("\n"+"=".repeat(80));
   console.log("  RANK -- (fees+incentives)/(votes+"+MY_VEAERO+")");
   console.log("=".repeat(80));
