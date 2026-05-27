@@ -119,7 +119,7 @@ async function fetchData(prevVotes={}){
     }
     prevVotes[p.pool.toLowerCase()] = p.voteWeight;
   }
-  return active.filter(p=>p.totalUsd>0&&p.veApy<5000).sort((a,b)=>b.ratio-a.ratio);
+  return active.filter(p=>p.totalUsd>50&&p.veApy<5000&&p.voteWeight>0).sort((a,b)=>b.ratio-a.ratio);
 }
 
 function render(data,cycle,timeLeft){
@@ -151,7 +151,7 @@ function render(data,cycle,timeLeft){
   if(!opt)return;
   const bp=data[0];
   const totalMyVotes=MY_LOCKS.reduce((a,b)=>a+b,0);
-  const votesAfter=Math.round(bp.voteWeight)+totalMyVotes;
+  const votesAfter=Math.round(bp.voteWeight)+MY_VEAERO;
 
   console.log("\n"+L);
   console.log("  РЕКОМЕНДАЦИЯ ДЛЯ ГОЛОСОВАНИЯ");
@@ -159,8 +159,8 @@ function render(data,cycle,timeLeft){
   console.log(`  Лучший пул:    \x1b[97m${bp.symbol}\x1b[0m`);
   console.log(`  Наград всего:  \x1b[92m${fU(bp.totalUsd)}\x1b[0m  (fees: ${fU(bp.feesUsd)} + bribes: ${fU(bp.bribeUsd)})`);
   console.log(`  Голоса сейчас: ${Math.round(bp.voteWeight).toLocaleString()} veAERO  (${bp.votePct.toFixed(2)}% от всех)`);
-  console.log(`  После моих:    ${votesAfter.toLocaleString()} veAERO  (+${totalMyVotes.toLocaleString()})`);
-  console.log(`  Моя доля:      ${(totalMyVotes/votesAfter*100).toFixed(2)}%`);
+  console.log(`  После моих:    ${votesAfter.toLocaleString()} veAERO  (+${MY_VEAERO.toLocaleString()})`);
+  console.log(`  Моя доля:      ${(MY_VEAERO/votesAfter*100).toFixed(2)}%`);
   console.log(`  veAPY:         ${bp.veApy.toFixed(1)}%`);
   console.log(`  100% в один:   \x1b[33m${fU(opt.totalSingle)}\x1b[0m`);
   console.log("\n  "+T);
@@ -168,7 +168,7 @@ function render(data,cycle,timeLeft){
   if(opt.singleBest){
     console.log(`  \x1b[92mОПТИМАЛЬНО: все ${totalMyVotes.toLocaleString()} veAERO -> ${bp.symbol}\x1b[0m`);
     console.log("  "+T);
-    console.log(`  ${"Пул".padEnd(24)} ${"Голосов сейчас".padStart(14)} ${"После+моих".padStart(12)} ${"Моя доля".padStart(10)} ${"Мои veAERO".padStart(12)} ${"Rewards".padStart(9)}`);
+    console.log(`  ${"Пул".padEnd(24)} ${"Голосов сейчас".padStart(14)} ${"После+моих".padStart(12)} ${"% пула".padStart(9)}       ${"% моих".padStart(7)}  ${"Мои veAERO".padStart(10)}  ${"Rewards".padStart(9)}`);
     console.log("  "+"-".repeat(90));
     const sharePct=(totalMyVotes/votesAfter*100).toFixed(3);
     console.log(`  ${bp.symbol.padEnd(24)} ${Math.round(bp.voteWeight).toLocaleString().padStart(14)} ${votesAfter.toLocaleString().padStart(12)} ${(sharePct+"%").padStart(10)} ${totalMyVotes.toLocaleString().padStart(12)}  \x1b[33m${fU(opt.totalSingle)}\x1b[0m`);
@@ -176,14 +176,15 @@ function render(data,cycle,timeLeft){
     const gain=opt.totalOpt-opt.totalSingle;
     console.log(`  \x1b[92mОПТИМАЛЬНО: распределить по ${opt.allocations.length} пулам  (+${fU(gain)}, +${(gain/opt.totalSingle*100).toFixed(1)}%)\x1b[0m`);
     console.log("  "+T);
-    console.log(`  ${"Пул".padEnd(24)} ${"Голосов сейчас".padStart(14)} ${"После+моих".padStart(12)} ${"Моя доля".padStart(10)} ${"Мои veAERO".padStart(12)} ${"Rewards".padStart(9)}`);
+    console.log(`  ${"Пул".padEnd(24)} ${"Голосов сейчас".padStart(14)} ${"После+моих".padStart(12)} ${"% пула".padStart(9)}       ${"% моих".padStart(7)}  ${"Мои veAERO".padStart(10)}  ${"Rewards".padStart(9)}`);
     console.log("  "+"-".repeat(90));
     for(const r of opt.allocations){
       const alloc=Math.round(r.alloc);
       const vAfter=Math.round(r.pool.voteWeight)+alloc;
       const sharePct=(alloc/vAfter*100).toFixed(3);
       const reward=r.pool.totalUsd*(alloc/(r.pool.voteWeight+alloc));
-      console.log(`  ${r.pool.symbol.padEnd(24)} ${Math.round(r.pool.voteWeight).toLocaleString().padStart(14)} ${vAfter.toLocaleString().padStart(12)} ${(sharePct+"%").padStart(10)} ${alloc.toLocaleString().padStart(12)}  \x1b[33m${fU(reward)}\x1b[0m`);
+      const myPct=(alloc/MY_VEAERO*100).toFixed(1);
+      console.log(`  ${r.pool.symbol.padEnd(24)} ${Math.round(r.pool.voteWeight).toLocaleString().padStart(14)} ${vAfter.toLocaleString().padStart(12)} ${(sharePct+"%").padStart(9)} пула  ${(myPct+"%").padStart(7)} моих  ${alloc.toLocaleString().padStart(10)}  \x1b[33m${fU(reward)}\x1b[0m`);
     }
     console.log("  "+T);
     // Suggest how to split across locks
